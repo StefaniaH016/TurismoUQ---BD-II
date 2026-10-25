@@ -118,6 +118,7 @@ ORDER BY municipio, ranking_municipio;
 -- Variación de ingresos mes contra mes (LAG).
 -- Compara el total de cada mes con el del mes anterior, en pesos y en
 -- porcentaje. El primer mes no tiene mes anterior, por eso sale vacío.
+-- De octubre a diciembre de 2026 solo están las reservas futuras, por eso bajan.
 
 SELECT mes,
        total_mes,
@@ -138,9 +139,10 @@ ORDER BY mes;
 -- Ingresos por municipio y tipo de alojamiento en un rango de fechas
 -- (consulta PARAMETRIZADA con variables de enlace).
 -- Declaración explícita de variables mediante VARIABLE e inicialización con EXEC.
+-- Se ejecuta con F5 y para otro rango se cambian las fechas del EXEC.
 
-VARIABLE fecha_inicio VARCHAR2(10);
-VARIABLE fecha_fin    VARCHAR2(10);
+VARIABLE fecha_inicio VARCHAR2(10)
+VARIABLE fecha_fin    VARCHAR2(10)
 
 EXEC :fecha_inicio := '2025-12-15';
 EXEC :fecha_fin    := '2026-01-15';
@@ -161,30 +163,25 @@ ORDER  BY ingresos DESC;
 
 
 --------------------------- CONSULTA 6 ----------------------------------------
--- Demostración de UNPIVOT a partir de datos organizados previamente por columnas.
--- Se calcula la matriz de ingresos por temporada en columnas independientes (ALTA, MEDIA, BAJA)
--- y el UNPIVOT transpone dichas columnas hacia filas.
+-- Movimiento de reservas por mes (UNPIVOT).
+-- La tabla RESERVA ya tiene sus fechas en columnas (creación, check-in,
+-- check-out y cancelación). El UNPIVOT las pasa a filas para contar cuántos
+-- eventos de cada tipo hay por mes. Las cancelaciones nulas no se cuentan.
 
-WITH resumen_tarifas AS (
-    SELECT ta.nombre AS tipo_alojamiento,
-           SUM(CASE WHEN v.nivel = 'ALTA'  THEN v.valor_noche ELSE 0 END) AS ingreso_alta,
-           SUM(CASE WHEN v.nivel = 'MEDIA' THEN v.valor_noche ELSE 0 END) AS ingreso_media,
-           SUM(CASE WHEN v.nivel = 'BAJA'  THEN v.valor_noche ELSE 0 END) AS ingreso_baja
-    FROM   v_noche_ocupada v
-    JOIN   alojamiento      a  ON a.id_alojamiento       = v.id_alojamiento
-    JOIN   tipo_alojamiento ta ON ta.id_tipo_alojamiento = a.id_tipo_alojamiento
-    GROUP  BY ta.nombre
-)
-SELECT tipo_alojamiento, temporada, ingreso
-FROM resumen_tarifas
+SELECT TO_CHAR(fecha, 'YYYY-MM') AS mes,
+       evento,
+       COUNT(*) AS cantidad
+FROM   reserva
 UNPIVOT (
-    ingreso FOR temporada IN (
-        ingreso_alta  AS 'ALTA',
-        ingreso_media AS 'MEDIA',
-        ingreso_baja  AS 'BAJA'
+    fecha FOR evento IN (
+        fecha_creacion    AS 'CREACION',
+        fecha_checkin     AS 'LLEGADA',
+        fecha_checkout    AS 'SALIDA',
+        fecha_cancelacion AS 'CANCELACION'
     )
 )
-ORDER BY tipo_alojamiento, temporada;
+GROUP  BY TO_CHAR(fecha, 'YYYY-MM'), evento
+ORDER  BY mes, evento;
 
 
 --------------------------- CONSULTA 7 ----------------------------------------
