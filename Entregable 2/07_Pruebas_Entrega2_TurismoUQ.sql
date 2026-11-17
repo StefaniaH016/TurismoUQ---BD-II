@@ -19,9 +19,17 @@ PROMPT =========================================================================
 SELECT pkg_turismo_uq.fn_valor_estadia(1, DATE '2025-11-28', DATE '2025-12-03') AS valor_estadia
   FROM dual;
 
--- Validación de excepción en la función (Fechas invertidas)
+-- Caso: una sola temporada (14/01/2026 a 18/01/2026, 4 noches en BAJA)
+SELECT pkg_turismo_uq.fn_valor_estadia(1, DATE '2026-01-14', DATE '2026-01-18') AS valor_estadia
+  FROM dual;
+
+-- Caso: cruza el cambio de año (30/12/2025 a 02/01/2026, 2 noches ALTA Diciembre + 1 noche ALTA Inicio Año)
+SELECT pkg_turismo_uq.fn_valor_estadia(1, DATE '2025-12-30', DATE '2026-01-02') AS valor_estadia
+  FROM dual;
+
+-- Validación de excepción en la función (fechas invertidas, 18/01/2026 a 14/01/2026) -> ORA-20020
 BEGIN
-    DBMS_OUTPUT.PUT_LINE(pkg_turismo_uq.fn_valor_estadia(1, DATE '2025-12-10', DATE '2025-12-05'));
+    DBMS_OUTPUT.PUT_LINE(pkg_turismo_uq.fn_valor_estadia(1, DATE '2026-01-18', DATE '2026-01-14'));
 EXCEPTION
     WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('Excepción fn_valor_estadia (Fechas invertidas) -> ' || SQLERRM);
@@ -399,3 +407,5 @@ PROMPT =========================================================================
 SELECT (SELECT COUNT(*) FROM reserva) AS total_reservas,
        (SELECT COUNT(*) FROM bitacora_tarifa) AS registros_bitacora
   FROM dual;
+  
+  
