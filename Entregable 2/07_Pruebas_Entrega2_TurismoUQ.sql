@@ -6,6 +6,10 @@ VARIABLE v_hab NUMBER
 VARIABLE v_aloj NUMBER
 VARIABLE v_res NUMBER
 VARIABLE v_mes VARCHAR2(7)
+VARIABLE v_fhab NUMBER
+VARIABLE v_faloj NUMBER
+VARIABLE v_fcap NUMBER
+VARIABLE v_fotro NUMBER
 
 PROMPT =========================================================================
 PROMPT                  PRUEBA 1: Función fn_valor_estadia
@@ -23,6 +27,16 @@ EXCEPTION
         DBMS_OUTPUT.PUT_LINE('Excepción fn_valor_estadia (Fechas invertidas) -> ' || SQLERRM);
 END;
 /
+
+-- 1c. fn_valor_estadia sin tarifa (fechas fuera de todas las temporadas) -> ORA-20021
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('1c valor -> ' || pkg_turismo_uq.fn_valor_estadia(1, DATE '2040-01-10', DATE '2040-01-12'));
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('1c Excepción fn_valor_estadia (sin tarifa) -> ' || SQLERRM);
+END;
+/
+
 
 PROMPT =========================================================================
 PROMPT             PRUEBA 2: Procedimiento sp_crear_reserva y exepciones
@@ -97,6 +111,99 @@ EXCEPTION
         ROLLBACK;
 END;
 /
+
+-- Datos base para 2e a 2j y 3d: habitación libre del 10 al 12 de enero de 2030 y otro alojamiento
+BEGIN
+    SELECT h.id_habitacion, h.id_alojamiento, h.capacidad_max
+      INTO :v_fhab, :v_faloj, :v_fcap
+      FROM habitacion h
+     WHERE NOT EXISTS (SELECT 1
+                         FROM reserva_habitacion rh
+                         JOIN reserva r ON r.id_reserva = rh.id_reserva
+                        WHERE rh.id_habitacion = h.id_habitacion
+                          AND r.estado <> 'CANCELADA'
+                          AND DATE '2030-01-10' < rh.fecha_out
+                          AND DATE '2030-01-12' > rh.fecha_in)
+     ORDER BY h.id_habitacion
+     FETCH FIRST 1 ROWS ONLY;
+
+    SELECT MIN(id_alojamiento) INTO :v_fotro FROM alojamiento WHERE id_alojamiento <> :v_faloj;
+END;
+/
+
+-- 2e. Habitación que no pertenece al alojamiento indicado -> ORA-20002
+BEGIN
+    pkg_turismo_uq.sp_crear_reserva(1, :v_fotro, :v_fhab, DATE '2030-01-10', DATE '2030-01-12', 1, :v_res);
+    DBMS_OUTPUT.PUT_LINE('2e NO dio error (revisar)');
+    ROLLBACK;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('2e Excepción sp_crear_reserva (habitación de otro alojamiento) -> ' || SQLERRM);
+        ROLLBACK;
+END;
+/
+
+-- 2f. Check-in anterior a hoy -> ORA-20005
+BEGIN
+    pkg_turismo_uq.sp_crear_reserva(1, :v_faloj, :v_fhab, TRUNC(SYSDATE) - 1, TRUNC(SYSDATE) + 1, 1, :v_res);
+    DBMS_OUTPUT.PUT_LINE('2f NO dio error (revisar)');
+    ROLLBACK;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('2f Excepción sp_crear_reserva (check-in pasado) -> ' || SQLERRM);
+        ROLLBACK;
+END;
+/
+
+-- 2g. Cliente inexistente -> ORA-20006
+BEGIN
+    pkg_turismo_uq.sp_crear_reserva(999999, :v_faloj, :v_fhab, DATE '2030-01-10', DATE '2030-01-12', 1, :v_res);
+    DBMS_OUTPUT.PUT_LINE('2g NO dio error (revisar)');
+    ROLLBACK;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('2g Excepción sp_crear_reserva (cliente inexistente) -> ' || SQLERRM);
+        ROLLBACK;
+END;
+/
+
+-- 2h. Cero huéspedes -> ORA-20007
+BEGIN
+    pkg_turismo_uq.sp_crear_reserva(1, :v_faloj, :v_fhab, DATE '2030-01-10', DATE '2030-01-12', 0, :v_res);
+    DBMS_OUTPUT.PUT_LINE('2h NO dio error (revisar)');
+    ROLLBACK;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('2h Excepción sp_crear_reserva (sin huéspedes) -> ' || SQLERRM);
+        ROLLBACK;
+END;
+/
+
+-- 2i. Más de 60 noches (64) -> ORA-20008
+BEGIN
+    pkg_turismo_uq.sp_crear_reserva(1, :v_faloj, :v_fhab, DATE '2030-01-10', DATE '2030-03-15', 1, :v_res);
+    DBMS_OUTPUT.PUT_LINE('2i NO dio error (revisar)');
+    ROLLBACK;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('2i Excepción sp_crear_reserva (más de 60 noches) -> ' || SQLERRM);
+        ROLLBACK;
+END;
+/
+
+-- 2j. Caso positivo: reserva en fechas libres -> debe crearse
+BEGIN
+    pkg_turismo_uq.sp_crear_reserva(1, :v_faloj, :v_fhab, DATE '2030-01-10', DATE '2030-01-12', 1, :v_res);
+    DBMS_OUTPUT.PUT_LINE('2j OK: reserva ' || :v_res || ' creada, valor ' ||
+        pkg_turismo_uq.fn_valor_estadia(:v_fhab, DATE '2030-01-10', DATE '2030-01-12'));
+    ROLLBACK;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('2j ERROR inesperado -> ' || SQLERRM);
+        ROLLBACK;
+END;
+/
+
 
 PROMPT =========================================================================
 PROMPT     PRUEBA 3: Disparador trg_impedir_solape_reserva (compound trigger)
@@ -173,6 +280,27 @@ EXCEPTION
 END;
 /
 
+-- 3d. INSERT directo en fechas libres -> debe entrar (caso positivo del disparador)
+DECLARE
+    v_nueva NUMBER;
+BEGIN
+    INSERT INTO reserva (id_cliente, id_alojamiento, fecha_creacion, fecha_checkin, fecha_checkout, estado)
+    VALUES (2, :v_faloj, TRUNC(SYSDATE), DATE '2030-02-01', DATE '2030-02-03', 'CONFIRMADA')
+    RETURNING id_reserva INTO v_nueva;
+
+    INSERT INTO reserva_habitacion (id_reserva, id_alojamiento, id_habitacion, fecha_in, fecha_out, num_huespedes)
+    VALUES (v_nueva, :v_faloj, :v_fhab, DATE '2030-02-01', DATE '2030-02-03', 1);
+
+    DBMS_OUTPUT.PUT_LINE('3d OK: reserva ' || v_nueva || ' insertada sin cruce.');
+    ROLLBACK;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('3d ERROR inesperado -> ' || SQLERRM);
+        ROLLBACK;
+END;
+/
+
+
 PROMPT =========================================================================
 PROMPT                  PRUEBA 4: Cursor sp_liquidacion_mensual
 PROMPT =========================================================================
@@ -184,6 +312,17 @@ SELECT a.nombre AS alojamiento, l.num_reservas, l.noches_vendidas, l.valor_total
  WHERE l.anio = 2025 AND l.mes = 12
  ORDER BY l.valor_total DESC FETCH FIRST 5 ROWS ONLY;
  
+
+-- 4b. Liquidación con mes inválido -> ORA-20030
+BEGIN
+    pkg_turismo_uq.sp_liquidacion_mensual(2025, 13);
+    DBMS_OUTPUT.PUT_LINE('4b NO dio error (revisar)');
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('4b Excepción sp_liquidacion_mensual (mes 13) -> ' || SQLERRM);
+END;
+/
+
 
 PROMPT =========================================================================
 PROMPT         PRUEBA 5: Auditoría en TARIFA (disparadores de fila y de sentencia)
@@ -260,5 +399,3 @@ PROMPT =========================================================================
 SELECT (SELECT COUNT(*) FROM reserva) AS total_reservas,
        (SELECT COUNT(*) FROM bitacora_tarifa) AS registros_bitacora
   FROM dual;
-  
-  
