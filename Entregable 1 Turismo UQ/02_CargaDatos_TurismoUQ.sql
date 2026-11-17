@@ -925,3 +925,12 @@ SELECT COUNT(*) AS solapes
                            AND b.id_reserva_habitacion > a.id_reserva_habitacion
                            AND a.fecha_in < b.fecha_out
                            AND b.fecha_in < a.fecha_out;
+
+-- Días de 2024 a 2026 sin temporada asignada (debe dar 0)
+SELECT COUNT(*) AS dias_sin_temporada
+  FROM (SELECT DATE '2024-01-01' + LEVEL - 1 AS dia
+          FROM dual
+        CONNECT BY LEVEL <= DATE '2026-12-31' - DATE '2024-01-01' + 1) d
+ WHERE NOT EXISTS (SELECT 1
+                     FROM temporada t
+                    WHERE d.dia BETWEEN t.fecha_inicio AND t.fecha_fin);

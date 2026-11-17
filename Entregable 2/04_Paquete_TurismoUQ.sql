@@ -53,6 +53,11 @@ CREATE OR REPLACE PACKAGE pkg_turismo_uq IS
         p_anio IN NUMBER,
         p_mes IN NUMBER
     );
+    PROCEDURE sp_cancelar_reserva (
+        p_id_reserva IN reserva.id_reserva%TYPE,
+        p_reembolso OUT NUMBER
+    );
+
 
 END pkg_turismo_uq;
 /
@@ -316,6 +321,55 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismo_uq IS
         DBMS_OUTPUT.PUT_LINE('Alojamientos liquidados: ' || v_tot_aloj);
         DBMS_OUTPUT.PUT_LINE('Total reservas: ' || v_tot_reservas || ' | Total liquidado: $' || v_tot_general);
     END sp_liquidacion_mensual;
+
+-- ------------------------ PROCEDIMIENTO: sp_cancelar_reserva -----------------------
+-- Cancela una reserva PENDIENTE o CONFIRMADA y calcula el reembolso
+-- Más de 5 días de anticipación: 80 % de lo pagado. Si no, 0 %
+
+    PROCEDURE sp_cancelar_reserva (
+        p_id_reserva IN reserva.id_reserva%TYPE,
+        p_reembolso OUT NUMBER
+    ) IS
+        v_estado reserva.estado%TYPE;
+        v_checkin reserva.fecha_checkin%TYPE;
+        v_pagado NUMBER;
+    BEGIN
+        SELECT estado, fecha_checkin
+          INTO v_estado, v_checkin
+          FROM reserva
+         WHERE id_reserva = p_id_reserva
+           FOR UPDATE;
+
+        IF v_estado NOT IN ('PENDIENTE', 'CONFIRMADA') THEN
+            RAISE_APPLICATION_ERROR(-20060, 'Solo se cancelan reservas PENDIENTE o CONFIRMADA.');
+        END IF;
+
+        IF TRUNC(SYSDATE) > v_checkin THEN
+            RAISE_APPLICATION_ERROR(-20061, 'No se puede cancelar una reserva después del check-in.');
+        END IF;
+
+        SELECT NVL(SUM(monto), 0)
+          INTO v_pagado
+          FROM pago
+         WHERE id_reserva = p_id_reserva
+           AND estado = 'EXITOSO';
+
+        UPDATE reserva
+           SET estado = 'CANCELADA',
+               fecha_cancelacion = TRUNC(SYSDATE)
+         WHERE id_reserva = p_id_reserva;
+
+        IF v_checkin - TRUNC(SYSDATE) > 5 THEN
+            p_reembolso := ROUND(v_pagado * 0.8);
+        ELSE
+            p_reembolso := 0;
+        END IF;
+
+        IF p_reembolso > 0 THEN
+            INSERT INTO pago (id_reserva, fecha_pago, monto, metodo, estado)
+            VALUES (p_id_reserva, SYSDATE, p_reembolso, 'TRANSFERENCIA', 'REEMBOLSADO');
+        END IF;
+    END sp_cancelar_reserva;
 
 END pkg_turismo_uq;
 /

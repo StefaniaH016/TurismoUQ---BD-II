@@ -184,11 +184,101 @@ COMPOUND TRIGGER
 END trg_impedir_solape_reserva;
 /
 
------------------------------- VERIFICACIÓN -------------------------------------
+------------------------------------------------------ 4 - VALIDACIÓN DE RESEÑAS -------------------------
+-- Solo se reseña una reserva COMPLETADA con check-out anterior a hoy
+
+CREATE OR REPLACE TRIGGER trg_valida_resena
+BEFORE INSERT ON resena
+FOR EACH ROW
+DECLARE
+    v_estado reserva.estado%TYPE;
+    v_checkout reserva.fecha_checkout%TYPE;
+BEGIN
+    SELECT estado, fecha_checkout
+      INTO v_estado, v_checkout
+      FROM reserva
+     WHERE id_reserva = :NEW.id_reserva;
+
+    IF v_estado <> 'COMPLETADA' OR v_checkout >= SYSDATE THEN
+        RAISE_APPLICATION_ERROR(-20050, 'Solo se puede reseñar una reserva COMPLETADA con check-out anterior a hoy.');
+    END IF;
+END trg_valida_resena;
+/
+
+------------------------------ 5 - VALIDACIÓN DE CAPACIDAD -----------------------
+-- Los huéspedes de cada habitación no superan su capacidad máxima
+
+CREATE OR REPLACE TRIGGER trg_valida_capacidad
+BEFORE INSERT OR UPDATE OF num_huespedes, id_habitacion ON reserva_habitacion
+FOR EACH ROW
+DECLARE
+    v_capacidad habitacion.capacidad_max%TYPE;
+BEGIN
+    SELECT capacidad_max
+      INTO v_capacidad
+      FROM habitacion
+     WHERE id_habitacion = :NEW.id_habitacion;
+
+    IF :NEW.num_huespedes > v_capacidad THEN
+        RAISE_APPLICATION_ERROR(-20051, 'La habitación ' || :NEW.id_habitacion
+            || ' tiene capacidad para ' || v_capacidad || ' huésped(es).');
+    END IF;
+END trg_valida_capacidad;
+/
+
+------------------------------ 6 - VALIDACIÓN DE TEMPORADAS ----------------------
+-- Dos temporadas no pueden cruzarse en fechas
+
+CREATE OR REPLACE TRIGGER trg_valida_temporada
+FOR INSERT OR UPDATE OF fecha_inicio, fecha_fin ON temporada
+COMPOUND TRIGGER
+
+    TYPE t_fila IS RECORD (
+        id_temporada NUMBER,
+        fecha_inicio DATE,
+        fecha_fin DATE
+    );
+    TYPE t_filas IS TABLE OF t_fila;
+    v_filas t_filas := t_filas();
+
+    BEFORE STATEMENT IS
+    BEGIN
+        v_filas := t_filas();
+    END BEFORE STATEMENT;
+
+    AFTER EACH ROW IS
+    BEGIN
+        v_filas.EXTEND;
+        v_filas(v_filas.LAST).id_temporada := :NEW.id_temporada;
+        v_filas(v_filas.LAST).fecha_inicio := :NEW.fecha_inicio;
+        v_filas(v_filas.LAST).fecha_fin := :NEW.fecha_fin;
+    END AFTER EACH ROW;
+
+    AFTER STATEMENT IS
+        v_choques NUMBER;
+    BEGIN
+        FOR i IN 1 .. v_filas.COUNT LOOP
+            SELECT COUNT(*)
+              INTO v_choques
+              FROM temporada t
+             WHERE t.id_temporada <> v_filas(i).id_temporada
+               AND t.fecha_inicio <= v_filas(i).fecha_fin
+               AND t.fecha_fin >= v_filas(i).fecha_inicio;
+
+            IF v_choques > 0 THEN
+                RAISE_APPLICATION_ERROR(-20040, 'La temporada ' || v_filas(i).id_temporada
+                    || ' se cruza con otra temporada.');
+            END IF;
+        END LOOP;
+    END AFTER STATEMENT;
+
+END trg_valida_temporada;
+/
+
+------ VERIFICACIÓN -------------------------------------
 
 -- Disparadores creados (ENABLED)
 
 SELECT trigger_name, trigger_type, triggering_event, table_name, status
 FROM user_triggers
 ORDER BY table_name, trigger_name;
-

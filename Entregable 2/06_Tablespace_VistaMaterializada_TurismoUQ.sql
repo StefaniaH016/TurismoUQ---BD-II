@@ -142,3 +142,36 @@ SELECT mes, ROUND(100 * SUM(noches_vendidas) / SUM(noches_disponibles), 2) AS pc
   FROM mv_ocupacion_mensual
  GROUP BY mes
  ORDER BY mes;
+
+-- ------------------------------ VISTA: SALDO DE RESERVA ----------------------------
+-- Valor total (estadía noche a noche + servicios) contra lo pagado en EXITOSO
+
+CREATE OR REPLACE VIEW v_saldo_reserva AS
+SELECT r.id_reserva,
+       r.estado,
+       NVL(e.total_estadia, 0) + NVL(s.total_servicios, 0) AS valor_total,
+       NVL(p.pagado, 0) AS pagado,
+       NVL(e.total_estadia, 0) + NVL(s.total_servicios, 0) - NVL(p.pagado, 0) AS saldo,
+       CASE
+           WHEN r.estado = 'CANCELADA' THEN 'NO APLICA'
+           WHEN NVL(p.pagado, 0) >= NVL(e.total_estadia, 0) + NVL(s.total_servicios, 0) THEN 'PAZ Y SALVO'
+           ELSE 'CON SALDO'
+       END AS paz_y_salvo
+  FROM reserva r
+  LEFT JOIN (SELECT id_reserva,
+                    SUM(pkg_turismo_uq.fn_valor_estadia(id_habitacion, fecha_in, fecha_out)) AS total_estadia
+               FROM reserva_habitacion
+              GROUP BY id_reserva) e ON e.id_reserva = r.id_reserva
+  LEFT JOIN (SELECT id_reserva, SUM(cantidad * precio_unitario) AS total_servicios
+               FROM reserva_servicio
+              GROUP BY id_reserva) s ON s.id_reserva = r.id_reserva
+  LEFT JOIN (SELECT id_reserva, SUM(monto) AS pagado
+               FROM pago
+              WHERE estado = 'EXITOSO'
+              GROUP BY id_reserva) p ON p.id_reserva = r.id_reserva;
+
+-- Reservas completadas sin paz y salvo (debe dar 0)
+SELECT COUNT(*) AS completadas_con_saldo
+  FROM v_saldo_reserva
+ WHERE estado = 'COMPLETADA'
+   AND paz_y_salvo <> 'PAZ Y SALVO';
